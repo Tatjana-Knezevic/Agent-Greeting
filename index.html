@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Auto greeting</title>
+	
+	<script src="https://code.jquery.com/jquery-3.3.1.min.js" integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+	<script src="https://sdk-cdn.mypurecloud.com/javascript/27.0.0/purecloud-platform-client-v2.min.js"></script>
+
+	<script type="text/javascript">
+
+		//
+		// NEED TO UPDATE
+		//
+		const clientId = 'ec936e1d-769a-48d1-ac3b-c25e076d7cf5';
+		const redirectUri = window.location.href;
+
+		// Set purecloud objects
+		const platformClient = require('platformClient');
+		const client = platformClient.ApiClient.instance;
+		const notificationsApi = new platformClient.NotificationsApi();
+		const userApi = new platformClient.UsersApi();
+		const conversationsApi = new platformClient.ConversationsApi();
+
+		// Set PureCloud settings
+		client.setEnvironment('mypurecloud.com');
+		client.setPersistSettings(true, 'AgentGreeting');
+
+		// Local vars
+		let userConversationsTopic = '';
+		let webSocket = null;
+		let notificationChannel, conversationId, participantId;
+
+		$(document).ready(() => {
+			// Authenticate with PureCloud
+			client.loginImplicitGrant(clientId, redirectUri)
+			
+				.then(() => {
+					console.log('Logged in');
+				})
+				
+				.then(() => {
+					// Create notification channel
+					return notificationsApi.postNotificationsChannels();
+				})
+				
+				.then((channel) => {
+					// Store notification channel for reuse
+					console.log('channel: ', channel);
+					notificationChannel = channel;
+
+					// Set up web socket
+					webSocket = new WebSocket(notificationChannel.connectUri);
+					webSocket.onmessage = handleNotification;
+					
+					// Get Id of user
+					return userApi.getUsersMe();
+				})
+				
+				.then((me) => {
+					
+					// Activate notifications stream
+					userConversationsTopic = 'v2.users.' + me.id + '.conversations';
+					return notificationsApi.putNotificationsChannelSubscriptions(notificationChannel.id, [ { id: userConversationsTopic } ]);
+				})
+
+				.catch((err) => console.error(err));
+		});
+		
+		// Handle incoming PureCloud notification from WebSocket
+		function handleNotification(message) {
+			// Parse notification string to a JSON object
+			const notification = JSON.parse(message.data);
+
+			// Discard unwanted notifications
+			if (notification.topicName.toLowerCase() === 'channel.metadata') {
+				// Heartbeat
+				console.info('Ignoring metadata: ', notification);
+				return;
+			} else if (notification.topicName.toLowerCase() !== userConversationsTopic.toLowerCase()) {
+				// Unexpected topic
+				console.warn('Unknown notification: ', notification);
+				return;
+			} else {
+				console.debug('Conversation notification: ', notification);
+			}
+
+			//If this is the first connected notification for the agent participant, conference in Greeting IVR flow
+			if (notification.eventBody.participants.filter(participant => participant.purpose === "agent")[0].calls[0].state === "connected" && conversationId != notification.eventBody.id) {
+				conversationId = notification.eventBody.id;
+				participantId = notification.eventBody.participants.filter(participant => participant.purpose === "agent")[0].id;
+				console.info("participant.id: ", notification.eventBody.participants.filter(participant => participant.purpose === "agent")[0].id);
+				let body = {
+					"participants": [
+						{
+							//
+							// NEED TO UPDATE
+							//
+							"address": // internal DID routed to Greeting IVR flow, such as '480XXXXXXX'
+						}
+					]};
+				
+				// API call to initiate conference
+				conversationsApi.postConversationsCallParticipants(conversationId, body)
+					.catch((err) => console.log(`${new Date().toLocaleTimeString()} - ${JSON.stringify(err,null,2)}`));
+			}
+		}
+	</script>
+</head>
+<body>
+	<p>Agent auto greeting initiated!</p>
+</body>
+</html>
